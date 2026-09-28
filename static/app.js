@@ -54,6 +54,8 @@ async function refresh() {
 }
 function changeContext() {
   contextVersion++;
+  clearTechnical();
+  $('technical').textContent = 'Loading technical analysis…';
   $('analysis').textContent = 'Select Analyze to review this symbol and timeframe.';
   loadChart(true);
 }
@@ -66,6 +68,17 @@ function drawChart(data) {
   for (let i = 0; i <= 4; i++) {
     const value = min + (max - min) * i / 4, py = y(value);
     svg += `<line x1="10" x2="598" y1="${py}" y2="${py}" stroke="#29404b"/><text x="604" y="${py+4}" fill="#99aaa9" font-size="11">${price(value)}</text>`;
+  }
+  if (technicalData && data.symbol === technicalData.symbol && data.timeframe === 'M15') {
+    const zones = technicalData.timeframes.M15.structure?.zones || [];
+    zones.forEach(zone => {
+      const active = Date.parse(zone.active_from_utc)/1000;
+      const start = candles.findIndex(c => c.time >= active);
+      if (start < 0) return;
+      const top = Math.max(20, Math.min(245, y(zone.upper))), bottom = Math.max(20, Math.min(245, y(zone.lower)));
+      const left = x(start)-step/2;
+      svg += `<rect x="${left}" y="${top}" width="${598-left}" height="${Math.max(0,bottom-top)}" fill="${zone.kind === 'support' ? '#75e6c9' : '#ff929d'}" opacity=".13"><title>${esc(zone.kind)} · active ${esc(zone.active_from_utc)}</title></rect>`;
+    });
   }
   candles.forEach((c, i) => {
     const color = c.close >= c.open ? '#75e6c9' : '#ff929d';
@@ -80,10 +93,13 @@ function drawChart(data) {
 async function loadChart(clear = false) {
   const version = ++chartVersion, name = selected, tf = $('tf').value;
   chartReady = false;
+  if (clear) clearTechnical();
+  $('technical').textContent = 'Refreshing technical analysis…';
   if (clear) {chartData = null; $('chart').innerHTML = '';}
   $('chartTitle').textContent = `${name} · ${tf}`;
   $('chartInfo').textContent = 'Refreshing candles · checking freshness…';
   updateStatus();
+  loadTechnical(version, name, tf);
   try {
     const data = await get(`/api/candles/${name}?timeframe=${tf}`);
     if (version !== chartVersion) return;
@@ -92,6 +108,62 @@ async function loadChart(clear = false) {
     if (version !== chartVersion) return;
     chartData = null; $('chart').innerHTML = ''; $('chartInfo').textContent = error.message;
   } finally {if (version === chartVersion) updateStatus();}
+}
+let technicalData = null;
+function clearTechnical() {
+  technicalData = null;
+  $('technicalEvidence').textContent = '';
+  $('technicalFeed').textContent = '';
+}
+function renderTechnicalFeed() {
+  if (!technicalData) return;
+  const d = technicalData, q = d.market_context;
+  const seconds = q.quote_time_utc ? Math.max(0, (Date.now() - Date.parse(q.quote_time_utc))/1000) : null;
+  const feed = d.live_feed_status === 'fresh' && seconds > d.config.quote_max_age_seconds ? 'stale' : d.live_feed_status;
+  $('technicalFeed').textContent = `Analysis: ${d.analysis_status} · Live feed: ${feed.toUpperCase()} · Quote: ${q.quote_time_utc || 'unavailable'}${seconds === null ? '' : ` (${Math.floor(seconds)}s old)`}`;
+  $('technicalFeed').style.color = feed === 'fresh' ? '#a8ded0' : '#ffd28b';
+}
+function displayEvidence(data) {
+  const digits = data.symbol_metadata?.digits ?? 5;
+  const tick = data.symbol_metadata?.trade_tick_size;
+  const rounded = (value, key) => {
+    if (value === null || typeof value !== 'object') {
+      if (typeof value !== 'number') return value;
+      const priceKey = /^(price|lower|upper|ema20|ema50|atr14|baseline_atr|atr_at_confirmation|last_close|reference_price|bid|ask|spread_price|.*distance_price|max_width)$/;
+      return priceKey.test(key) && tick ? Number((Math.round(value/tick)*tick).toFixed(digits)) : Number(value.toFixed(6));
+    }
+    if (Array.isArray(value)) return value.map(v => rounded(v, key));
+    return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,rounded(v,k)]));
+  };
+  return JSON.stringify(rounded(data, ''), null, 2);
+}
+async function loadTechnical(version, name, tf) {
+  try {
+    const data = await get(`/api/technical/${name}`);
+    if (version !== chartVersion) return;
+    technicalData = data;
+    const p = data.timeframes[data.primary_timeframe];
+    const nearby = [p.location?.nearest_support,p.location?.nearest_resistance].filter(Boolean).sort((a,b)=>a.distance_price-b.distance_price)[0];
+    const quotePrice = value => {
+      const tick = data.symbol_metadata.trade_tick_size;
+      return (Math.round(value/tick)*tick).toFixed(data.symbol_metadata.digits);
+    };
+    $('technical').textContent = `${data.symbol} · M15 regime: ${data.primary_regime}\n` +
+      `${data.config.htf} bias: ${data.htf_bias || 'unavailable'} · alignment: ${data.htf_alignment}\n` +
+      `Trend: ${p.trend?.state || 'unavailable'} · Structure: ${p.structure?.state || 'unavailable'}\n` +
+      `Volatility: ${p.volatility?.state || 'unavailable'} · Momentum: ${p.momentum?.state || 'unavailable'}\n` +
+      `Location: ${p.location?.state || 'unavailable'} · M5 momentum: ${data.timing_momentum?.state || 'unavailable'}\n` +
+      (nearby ? `Nearest ${nearby.zone.kind}: ${quotePrice(nearby.zone.lower)}–${quotePrice(nearby.zone.upper)} · distance ${nearby.distance_atr.toFixed(2)} ATR\n` : '') +
+      `Last M15 close: ${p.last_bar_close_utc || 'unavailable'}\n` +
+      `Reasons: ${data.reasons.map(r => r.code).join(' · ')}`;
+    $('technicalEvidence').textContent = displayEvidence(data);
+    renderTechnicalFeed();
+    if (chartData && chartData.symbol === data.symbol) drawChart(chartData);
+  } catch (error) {
+    if (version !== chartVersion) return;
+    clearTechnical();
+    $('technical').textContent = 'Technical analysis unavailable: ' + error.message;
+  }
 }
 $('tf').onchange = changeContext;
 $('analyze').onclick = async () => {
@@ -105,4 +177,4 @@ $('analyze').onclick = async () => {
   finally {analysisBusy = false; updateStatus();}
 };
 refresh(); loadChart(true);
-setInterval(refresh, 5000); setInterval(() => loadChart(), 30000); setInterval(updateStatus, 1000);
+setInterval(refresh, 5000); setInterval(() => loadChart(), 30000); setInterval(() => {updateStatus(); renderTechnicalFeed();}, 1000);
