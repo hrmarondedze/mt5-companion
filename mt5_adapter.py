@@ -1,5 +1,6 @@
 """Read one broker snapshot under the caller's terminal lock."""
 from market_data import Candle, MarketSnapshot, SymbolMetadata, Quote, TimeframeData, PERIOD_SECONDS
+from broker_time import to_utc
 
 
 def capture_snapshot(mt5, symbol, as_of, config):
@@ -12,7 +13,7 @@ def capture_snapshot(mt5, symbol, as_of, config):
             frames.append(TimeframeData(tf, (), 'HISTORY_UNAVAILABLE'))
             continue
         try:
-            all_bars = tuple(Candle(int(r['time']), float(r['open']), float(r['high']), float(r['low']),
+            all_bars = tuple(Candle(int(to_utc(r['time'])), float(r['open']), float(r['high']), float(r['low']),
                                     float(r['close']), int(r['tick_volume'])) for r in rates)
             # Reject disorder, not silently repair it; sorted MT5 output is the contract.
             from market_data import candle_error
@@ -25,7 +26,7 @@ def capture_snapshot(mt5, symbol, as_of, config):
     quote = None
     if tick is not None:
         stamp = tick.time_msc / 1000 if tick.time_msc else tick.time
-        quote = Quote(float(stamp), float(tick.bid), float(tick.ask))
+        quote = Quote(to_utc(stamp), float(tick.bid), float(tick.ask))
     # No broker schedule is guessed. A successful historical read does not prove live connectivity.
     terminal = mt5.terminal_info()
     connected = bool(terminal.connected) if terminal is not None else None

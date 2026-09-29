@@ -16,6 +16,15 @@ from market_data import PERIOD_SECONDS
 from engines.technical import analyze_technical
 from engines.config import AnalysisConfig
 from mt5_adapter import capture_snapshot
+from broker_time import to_utc, broker_timezone
+from utc_clock import clock
+
+
+def utc_now():
+    try:
+        return clock.now()
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 load_dotenv()
 try:
@@ -34,7 +43,7 @@ def connect():
     if mt5 is None:
         raise HTTPException(503, "Install requirements on Windows with MT5 installed.")
     path = os.getenv("MT5_TERMINAL_PATH", "").strip()
-    if not (mt5.initialize(path=path) if path else mt5.initialize()):
+    if not (mt5.initialize(path=path, timeout=5000) if path else mt5.initialize(timeout=5000)):
         raise HTTPException(503, f"MT5 unavailable: {mt5.last_error()}. Open and sign in to your Weltrade MT5 terminal.")
 
 
@@ -76,13 +85,16 @@ def market():
                     raise HTTPException(503, "No tick available")
                 if not all(math.isfinite(v) and v > 0 for v in (tick.bid, tick.ask)) or tick.ask < tick.bid:
                     raise HTTPException(503, "Invalid bid/ask quote")
-                observed = datetime.fromtimestamp(tick.time_msc / 1000 if tick.time_msc else tick.time, timezone.utc)
+                observed = datetime.fromtimestamp(to_utc(tick.time_msc / 1000 if tick.time_msc else tick.time), timezone.utc)
+                now = utc_now()
+                if observed.timestamp() > now + 3:
+                    raise HTTPException(503, 'QUOTE_AFTER_AS_OF: verify broker timestamp timezone')
                 result.append({"base": base, "symbol": name, "bid": tick.bid, "ask": tick.ask,
                                "spread": tick.ask - tick.bid, "time": observed.isoformat(),
-                               "age_seconds": max(0, round(time.time() - observed.timestamp(), 1)), "error": None})
+                               "age_seconds": max(0, round(now - observed.timestamp(), 1)), "error": None})
             except HTTPException as exc:
                 result.append({"base": base, "error": exc.detail})
-        return {"server_time": datetime.now(timezone.utc).isoformat(), "symbols": result}
+        return {"server_time": datetime.fromtimestamp(utc_now(), timezone.utc).isoformat(), "symbols": result}
 
 
 @app.get("/api/candles/{base}")
@@ -96,8 +108,8 @@ def candles(base: str, timeframe: str = "M5"):
         rates = mt5.copy_rates_from_pos(symbol, getattr(mt5, PERIODS[timeframe]), 0, 121)
         if rates is None or len(rates) < 20:
             raise HTTPException(503, f"Insufficient {timeframe} history in MT5")
-        return {"symbol": symbol, "timeframe": timeframe,
-                "candles": [{"time": int(r["time"]), "open": float(r["open"]), "high": float(r["high"]),
+        return {"symbol": symbol, "timeframe": timeframe, "as_of_utc": utc_now(),
+                "candles": [{"time": int(to_utc(r["time"])), "open": float(r["open"]), "high": float(r["high"]),
                              "low": float(r["low"]), "close": float(r["close"]), "volume": int(r["tick_volume"])}
                             for r in rates]}
 
@@ -112,7 +124,7 @@ def market_snapshot(base: str, config: AnalysisConfig):
     with lock:
         connect()
         symbol = resolve(base)
-        return capture_snapshot(mt5, symbol, time.time(), config)
+        return capture_snapshot(mt5, symbol, utc_now(), config)
 
 
 @app.get("/api/technical/{base}")
@@ -122,7 +134,9 @@ def technical(base: str, htf: str = "H1", timing: bool = True):
         raise HTTPException(400, "Unsupported symbol or higher timeframe")
     config = AnalysisConfig(htf=htf, timing='M5' if timing else None)
     try:
-        return analyze_technical(market_snapshot(base, config), config)
+        result = analyze_technical(market_snapshot(base, config), config)
+        result['source_time'] = {'clock': 'HTTPS consensus; monotonic elapsed', 'broker_timezone': broker_timezone(), 'display_timezone': 'Africa/Johannesburg'}
+        return result
     except ValueError as exc:
         raise HTTPException(503, str(exc)) from exc
 
@@ -139,7 +153,7 @@ def analyze(request: AnalysisRequest):
     if not tick or tick.get("error") or tick["age_seconds"] > 120:
         raise HTTPException(503, "Quote unavailable or older than 120 seconds. Analysis paused.")
     period_seconds = PERIOD_SECONDS[data["timeframe"]]
-    if time.time() - data["candles"][-1]["time"] > period_seconds + 120:
+    if utc_now() - data["candles"][-1]["time"] > period_seconds + 120:
         raise HTTPException(503, "Candle history is stale. Analysis paused; refresh history in MT5.")
     import json
     from openai import OpenAI

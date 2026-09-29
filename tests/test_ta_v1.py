@@ -69,6 +69,17 @@ class FormulaTests(unittest.TestCase):
         r = analyze(snap(),replace(CFG,separation_deadband=100))
         self.assertEqual(r['timeframes']['M15']['trend']['state'],'flat_mixed')
 
+    def test_volatility_boundary_values_are_normal(self):
+        b=list(bars(flat=True))
+        # Baseline remains 2 because 37 of the previous 50 ATRs are unchanged.
+        for factor in (.8, 1.3):
+            changed=b[:-14]+[replace(c,high=100+factor,low=100-factor) for c in b[-14:]]
+            v=readings(changed,CFG)[1]
+            self.assertAlmostEqual(v['relative_atr'],factor)
+            # Use the calculated exact ratio as boundary to avoid decimal float representation ambiguity.
+            cfg=replace(CFG,quiet_threshold=v['relative_atr']) if factor == .8 else replace(CFG,elevated_threshold=v['relative_atr'])
+            self.assertEqual(readings(changed,cfg)[1]['state'],'normal')
+
 
 class CausalityTests(unittest.TestCase):
     def test_deterministic_canonical_json(self):
@@ -148,6 +159,15 @@ class QualityTests(unittest.TestCase):
         self.assertFalse(session.contains(stamp('2026-03-07T13:30:00')))
         self.assertTrue(session.contains(stamp('2026-03-08T13:30:00')))
 
+    def test_weekend_gap_is_expected_when_schedule_known(self):
+        start=datetime(2026,9,14,tzinfo=timezone.utc).timestamp()
+        session=SessionWindow('broker','UTC',(0,1,2,3,4),0,1440)
+        times=[start+i*900 for i in range(8*96) if session.contains(start+i*900)]
+        b=tuple(Candle(int(t),100,101,99,100) for t in times)
+        s=replace(snap(b),sessions=(session,))
+        self.assertEqual(analyze(s)['analysis_status'],'valid')
+        self.assertIn('EXPECTED_SESSION_GAP',[r['code'] for r in analyze(s)['reasons']])
+
 
 class ZoneTests(unittest.TestCase):
     def test_merge_width_and_activation(self):
@@ -171,6 +191,14 @@ class ZoneTests(unittest.TestCase):
         v=dict(state='elevated',atr14=2)
         self.assertEqual(regime(b,{'state':'up'},structure,v,[z],CFG)[0],'breakout_candidate')
         self.assertEqual(regime(b,{'state':'up'},structure,v,[],CFG)[0],'trending_up')
+
+    def test_range_requires_two_touches_each_side(self):
+        zones=[dict(kind='support',lower=90,upper=92,source_swing_ids=['a','b']),dict(kind='resistance',lower=108,upper=110,source_swing_ids=['c','d'])]
+        b=[Candle(1,100,101,99,100),Candle(2,100,101,99,100)]
+        args=(b,{'state':'flat_mixed'},{'state':'mixed','zones':zones},{'state':'normal','atr14':2},[],CFG)
+        self.assertEqual(regime(*args)[0],'range')
+        zones[0]['source_swing_ids']=['a']
+        self.assertEqual(regime(*args)[0],'mixed')
 
 
 class AdapterTests(unittest.TestCase):
