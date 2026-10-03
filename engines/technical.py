@@ -24,10 +24,9 @@ def quality(bars, snapshot, duration, config):
     reasons, status = [], 'valid'
     missing, unexplained = 0, 0
     # Classify missing expected bar opens, including the trailing interval, only with a supplied schedule.
-    pairs = list(zip([b.time for b in bars], [b.time for b in bars][1:]))
-    pairs.append((bars[-1].time, snapshot.as_of_utc - duration + 1))
-    for start, end in pairs:
-        count = max(0, math.ceil((end - start) / duration) - 1)
+    intervals = [(a.time, max(0, math.ceil((b.time-a.time)/duration)-1)) for a,b in zip(bars,bars[1:])]
+    intervals.append((bars[-1].time, max(0, math.floor((snapshot.as_of_utc-bars[-1].time-duration)/duration))))
+    for start, count in intervals:
         if not count:
             continue
         missing += count

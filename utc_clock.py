@@ -11,23 +11,29 @@ class UTCClock:
         self._lock = Lock()
         self._anchor = None
         self._epoch = None
+        self._last_attempt = None
 
     def now(self):
         with self._lock:
             mono = time.monotonic()
-            if self._anchor is None or mono - self._anchor > 300:
+            needs_sync = self._anchor is None or mono - self._anchor > 300
+            if needs_sync and (self._last_attempt is None or mono - self._last_attempt >= 30):
+                self._last_attempt = mono
                 samples = []
                 for url in ('https://www.google.com/generate_204', 'https://www.cloudflare.com/cdn-cgi/trace'):
                     try:
                         start = time.monotonic()
                         request = urllib.request.Request(url + '?companion=' + uuid.uuid4().hex, headers={'Cache-Control': 'no-cache'})
                         with urllib.request.urlopen(request, timeout=4) as response:
-                            stamp = parsedate_to_datetime(response.headers['Date']).timestamp()
+                            dated = parsedate_to_datetime(response.headers['Date'])
+                            if dated.tzinfo is None:
+                                continue
+                            stamp = dated.timestamp()
                             if int(response.headers.get('Age', '0')) > 0:
                                 continue
                         end = time.monotonic()
                         if end - start <= 4:
-                            samples.append((stamp + (end-start)/2, end))
+                            samples.append((stamp, end))
                     except (OSError, ValueError, TypeError, KeyError):
                         continue
                 if len(samples) == 2:
@@ -37,8 +43,8 @@ class UTCClock:
                         # HTTP Date is only second-resolution. Stay behind its estimate so
                         # a bar cannot be treated as closed prematurely within clock uncertainty.
                         self._epoch, self._anchor = min(values) - 1, end
-                if self._anchor is None or time.monotonic() - self._anchor > 900:
-                    raise RuntimeError('UTC_CLOCK_UNAVAILABLE: external UTC could not be verified')
+            if self._anchor is None or time.monotonic() - self._anchor > 900:
+                raise RuntimeError('UTC_CLOCK_UNAVAILABLE: external UTC could not be verified')
             return self._epoch + time.monotonic() - self._anchor
 
 

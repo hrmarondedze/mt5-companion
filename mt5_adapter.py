@@ -1,6 +1,7 @@
 """Read one broker snapshot under the caller's terminal lock."""
 from market_data import Candle, MarketSnapshot, SymbolMetadata, Quote, TimeframeData, PERIOD_SECONDS
-from broker_time import to_utc
+from broker_time import to_utc, from_utc
+from datetime import datetime, timezone
 
 
 def capture_snapshot(mt5, symbol, as_of, config):
@@ -27,6 +28,17 @@ def capture_snapshot(mt5, symbol, as_of, config):
     if tick is not None:
         stamp = tick.time_msc / 1000 if tick.time_msc else tick.time
         quote = Quote(to_utc(stamp), float(tick.bid), float(tick.ask))
+        if quote.time > as_of:
+            # The latest tick can arrive during capture, or inside UTC clock uncertainty.
+            # Retrieve a real earlier quote; never clamp or backdate its timestamp.
+            ticks = mt5.copy_ticks_range(symbol,
+                datetime.fromtimestamp(from_utc(as_of - config.quote_max_age_seconds), timezone.utc),
+                datetime.fromtimestamp(from_utc(as_of), timezone.utc), mt5.COPY_TICKS_ALL)
+            if ticks is not None:
+                eligible = [t for t in ticks if to_utc(float(t['time_msc']) / 1000 if t['time_msc'] else float(t['time'])) <= as_of]
+                if eligible:
+                    previous = eligible[-1]
+                    quote = Quote(to_utc(float(previous['time_msc']) / 1000 if previous['time_msc'] else float(previous['time'])), float(previous['bid']), float(previous['ask']))
     # No broker schedule is guessed. A successful historical read does not prove live connectivity.
     terminal = mt5.terminal_info()
     connected = bool(terminal.connected) if terminal is not None else None

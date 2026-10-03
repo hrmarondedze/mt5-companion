@@ -97,6 +97,11 @@ class CausalityTests(unittest.TestCase):
         self.assertNotEqual(before['timeframes']['H1']['last_bar_close_utc'],now['timeframes']['H1']['last_bar_close_utc'])
         self.assertEqual(now['timeframes']['M15']['closed_bar_count'],300)
 
+    def test_forming_bar_not_counted_as_missing_before_close(self):
+        s=snap()
+        result=analyze(replace(s,as_of_utc=s.as_of_utc+899.9))
+        self.assertEqual(result['timeframes']['M15']['status'],'valid')
+
     def test_manual_swing_confirmation_and_equal_high(self):
         b=tuple(Candle(1000+i*60,5,h,0,5) for i,h in enumerate([6,7,10,7,6]))
         self.assertEqual(confirmed_swings(b[:-1],[2]*4,60,2),[])
@@ -202,6 +207,11 @@ class ZoneTests(unittest.TestCase):
 
 
 class AdapterTests(unittest.TestCase):
+    def setUp(self):
+        self.env = patch.dict('os.environ', {'MT5_TIMESTAMP_TIMEZONE': 'UTC'})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
     def test_exact_symbol_metadata_and_closed_filter(self):
         mt=Mock(); mt.symbol_info.return_value=SimpleNamespace(point=.01,trade_tick_size=.01,digits=2)
         mt.copy_rates_from_pos.return_value=[dict(time=900,open=1,high=2,low=0,close=1,tick_volume=1),dict(time=1800,open=1,high=2,low=0,close=1,tick_volume=1)]
@@ -214,3 +224,14 @@ class AdapterTests(unittest.TestCase):
     def test_endpoint_no_api_key(self):
         with patch.dict('os.environ',{},clear=True),patch.object(main,'market_snapshot',return_value=snap()):
             self.assertEqual(main.technical('XAUUSD')['engine_version'],'ta-v1.0.0')
+
+    def test_ai_explains_one_observation_with_matching_timestamp(self):
+        import json
+        observation=analyze(snap())
+        client=Mock()
+        client.responses.create.return_value=SimpleNamespace(output_text='Explanation')
+        with patch.dict('os.environ',{'OPENAI_API_KEY':'test'}),patch.object(main,'technical',return_value=observation) as technical,patch.dict('sys.modules',{'openai':SimpleNamespace(OpenAI=lambda:client)}):
+            result=main.analyze(main.AnalysisRequest(symbol='XAUUSD'))
+        technical.assert_called_once_with('XAUUSD')
+        self.assertEqual(result['quote_time'],observation['market_context']['quote_time_utc'])
+        self.assertEqual(json.loads(client.responses.create.call_args.kwargs['input'])['technical_observation'],observation)

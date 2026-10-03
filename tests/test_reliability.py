@@ -9,6 +9,8 @@ class ReliabilityTests(unittest.TestCase):
     def setUp(self):
         self.env = patch.dict(os.environ, {'OPENAI_API_KEY':'test'}, clear=True)
         self.env.start()
+        self.utc = patch.object(main, 'utc_now', side_effect=time.time)
+        self.utc.start()
         self.mt5 = Mock()
         self.mt5.initialize.return_value = True
         self.mt5.symbol_select.return_value = True
@@ -18,6 +20,7 @@ class ReliabilityTests(unittest.TestCase):
         self.bridge.start()
     def tearDown(self):
         self.bridge.stop()
+        self.utc.stop()
         self.env.stop()
     def test_exact_symbol_preferred(self):
         self.mt5.symbols_get.return_value = [SimpleNamespace(name=n) for n in ['XAUUSDm','XAUUSD']]
@@ -46,12 +49,11 @@ class ReliabilityTests(unittest.TestCase):
         self.mt5.copy_rates_from_pos.return_value = []
         with self.assertRaises(main.HTTPException): main.candles('XAUUSD')
     def test_stale_quote_blocks_analysis(self):
-        self.mt5.symbol_info_tick.return_value.time_msc = int((time.time()-180)*1000)
-        with patch.object(main,'candles',return_value={'timeframe':'M5','candles':[{'time':time.time()}]}):
+        with patch.object(main,'technical',return_value={'live_feed_status':'stale'}):
             with self.assertRaises(main.HTTPException) as exc: main.analyze(main.AnalysisRequest(symbol='XAUUSD'))
         self.assertIn('Quote',exc.exception.detail)
     def test_stale_candles_block_analysis(self):
-        with patch.object(main,'candles',return_value={'timeframe':'M5','candles':[{'time':time.time()-1000}]}):
+        with patch.object(main,'technical',return_value={'live_feed_status':'fresh','primary_timeframe':'M15','timeframes':{'M15':{'reasons':[{'code':'OLD_LAST_CLOSED_BAR'}]}}}):
             with self.assertRaises(main.HTTPException) as exc: main.analyze(main.AnalysisRequest(symbol='XAUUSD'))
         self.assertIn('history is stale',exc.exception.detail)
 

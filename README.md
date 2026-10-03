@@ -25,21 +25,21 @@ A local, read-only dashboard for XAUUSD, BTCUSD, GBPUSD, and EURUSD from your ow
 - Up to 121 candles on the selected timeframe. The chart shows OHLC candlesticks, including the current forming candle.
 - Optional AI explanation sends the versioned technical observation when you press Explain. Local technical analysis refreshes every 30 seconds; AI never runs in the background.
 
-## Technical Analysis Engine — ta-v1.0.0
+## Technical Analysis Engine â€” ta-v1.0.0
 
 The dashboard runs local technical analysis without an API key. The observation
 uses M15 as primary, H1 context (H4 configurable), and optional M5 timing.
 Chart timeframe selection is independent of these roles.
 
-- `GET /api/technical/XAUUSD` — versioned observation.
-- `GET /api/technical/XAUUSD?htf=H4&timing=false` — alternate context.
+- `GET /api/technical/XAUUSD` â€” versioned observation.
+- `GET /api/technical/XAUUSD?htf=H4&timing=false` â€” alternate context.
 - `engines/technical.py`: pure `analyze(snapshot, config)`, canonical JSON.
 - `engines/config.py`: frozen, hashed numerical defaults.
 - `engines/indicators.py`: SMA-seeded EMA20/50, rolling-mean ATR14,
   previous-50 ATR baseline, normalized six-close move and efficiency.
 - `engines/structure.py`: strict confirmed swings, bounded zones, location and regime.
 - `market_data.py`: frozen multi-timeframe inputs, symbol metadata, quotes and schedules.
-- `mt5_adapter.py`: resolved MT5 symbol → closed-candle snapshot.
+- `mt5_adapter.py`: resolved MT5 symbol â†’ closed-candle snapshot.
 - `replay.py`: causal replay, state duration/flicker report and reference comparison.
 
 See [the implementation and acceptance notes](docs/technical-v1.md) for policies,
@@ -74,3 +74,15 @@ With Node.js installed, run the frontend request-race and stale-state checks:
 node --test tests/frontend.test.cjs
 ```
 
+
+## Verification completed
+
+See [validation results](docs/validation-report.md): native MT5 EMA/ATR parity,
+2,000 causal replay observations across separate periods and all four instruments,
+and recorded regime flicker. These checks do not establish trading expectancy.
+
+The adapter's broker timestamp timezone is configured separately from the
+Pretoria display timezone. This terminal was verified at UTC+03:00; the local
+`.env` uses `MT5_TIMESTAMP_TIMEZONE=Etc/GMT-3`. Reverify if the broker changes
+its offset. External HTTPS UTC checks require internet access; no PC-clock
+fallback is used when the trusted time cache expires.

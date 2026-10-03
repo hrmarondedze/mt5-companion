@@ -3,9 +3,11 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let selected = 'XAUUSD', quotes = {}, marketBusy = false, chartVersion = 0, contextVersion = 0;
 let marketOk = false, marketReceived = 0, chartReady = false, analysisBusy = false, chartData = null;
+let chartReceived = 0, technicalReceived = 0;
+const displayTime = value => new Date(value).toLocaleString('en-ZA', {timeZone:'Africa/Johannesburg',timeZoneName:'short'});
 const periods = {M1:60, M5:300, M15:900, H1:3600, H4:14400};
 const price = value => Number(value).toLocaleString(undefined, {maximumFractionDigits:5});
-const age = q => Math.max(0, q.age_seconds + (Date.now() - marketReceived) / 1000);
+const age = q => Math.max(0, q.age_seconds + (performance.now() - marketReceived) / 1000);
 async function get(url, options) {
   const response = await fetch(url, {...options, signal:AbortSignal.timeout(options ? 120000 : 15000)});
   const body = await response.json();
@@ -13,7 +15,9 @@ async function get(url, options) {
   return body;
 }
 function chartFresh() {
-  return chartData && Date.now()/1000 - chartData.candles.at(-1).time <= periods[chartData.timeframe] + 120;
+  if (!chartData || !Number.isFinite(chartData.as_of_utc)) return false;
+  const age = chartData.as_of_utc + (performance.now()-chartReceived)/1000 - chartData.candles.at(-1).time;
+  return age >= -3 && age <= periods[chartData.timeframe] + 120;
 }
 function updateStatus() {
   const good = names.filter(n => quotes[n] && !quotes[n].error && age(quotes[n]) <= 120);
@@ -36,7 +40,7 @@ async function refresh() {
   try {
     const data = await get('/api/market');
     quotes = Object.fromEntries(data.symbols.map(q => [q.base, q]));
-    marketReceived = Date.now(); marketOk = true;
+    marketReceived = performance.now(); marketOk = true;
     $('cards').innerHTML = names.map(n => {
       const q = quotes[n] || {error:'No quote returned'};
       return `<button class="card ${selected === n ? 'active' : ''}" data-symbol="${n}" aria-pressed="${selected === n}"><strong>${n}</strong><div class="price">${q.error ? '—' : price(q.bid)}</div><div class="meta">${q.error ? esc(q.error) : `Ask ${price(q.ask)} · Spread ${Number(q.spread).toPrecision(3)}`}</div><div class="meta" data-age="${n}"></div></button>`;
@@ -82,13 +86,13 @@ function drawChart(data) {
   }
   candles.forEach((c, i) => {
     const color = c.close >= c.open ? '#75e6c9' : '#ff929d';
-    svg += `<g><title>${esc(new Date(c.time*1000).toLocaleString())} | O ${c.open} H ${c.high} L ${c.low} C ${c.close}${i === candles.length-1 ? ' | Forming' : ''}</title><line x1="${x(i)}" x2="${x(i)}" y1="${y(c.high)}" y2="${y(c.low)}" stroke="${color}"/><rect x="${x(i)-step*.32}" y="${Math.min(y(c.open),y(c.close))}" width="${step*.64}" height="${Math.max(1,Math.abs(y(c.open)-y(c.close)))}" fill="${color}"/></g>`;
+    svg += `<g><title>${esc(displayTime(c.time*1000))} | O ${c.open} H ${c.high} L ${c.low} C ${c.close}${c.time + periods[data.timeframe] > data.as_of_utc ? ' | Forming' : ' | Closed'}</title><line x1="${x(i)}" x2="${x(i)}" y1="${y(c.high)}" y2="${y(c.low)}" stroke="${color}"/><rect x="${x(i)-step*.32}" y="${Math.min(y(c.open),y(c.close))}" width="${step*.64}" height="${Math.max(1,Math.abs(y(c.open)-y(c.close)))}" fill="${color}"/></g>`;
   });
   [0, Math.floor((candles.length-1)/2), candles.length-1].forEach((i, j) => {
-    svg += `<text x="${x(i)}" y="270" text-anchor="${j === 0 ? 'start' : j === 2 ? 'end' : 'middle'}" fill="#99aaa9" font-size="11">${esc(new Date(candles[i].time*1000).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}))}</text>`;
+    svg += `<text x="${x(i)}" y="270" text-anchor="${j === 0 ? 'start' : j === 2 ? 'end' : 'middle'}" fill="#99aaa9" font-size="11">${esc(new Date(candles[i].time*1000).toLocaleString(undefined,{timeZone:'Africa/Johannesburg',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}))}</text>`;
   });
   $('chart').innerHTML = svg;
-  $('chartInfo').textContent = `${data.symbol} · ${candles.length} candles · latest ${new Date(candles.at(-1).time*1000).toLocaleString()} · last candle forming. Hover for OHLC.`;
+  $('chartInfo').textContent = `${data.symbol} · ${candles.length} candles · latest ${displayTime(candles.at(-1).time*1000)} · ${candles.at(-1).time + periods[data.timeframe] > data.as_of_utc ? 'last candle forming' : 'last candle closed'} · Pretoria time. Hover for OHLC.`;
 }
 async function loadChart(clear = false) {
   const version = ++chartVersion, name = selected, tf = $('tf').value;
@@ -103,7 +107,7 @@ async function loadChart(clear = false) {
   try {
     const data = await get(`/api/candles/${name}?timeframe=${tf}`);
     if (version !== chartVersion) return;
-    chartData = data; chartReady = true; drawChart(data);
+    chartData = data; chartReceived = performance.now(); chartReady = true; drawChart(data);
   } catch(error) {
     if (version !== chartVersion) return;
     chartData = null; $('chart').innerHTML = ''; $('chartInfo').textContent = error.message;
@@ -118,9 +122,9 @@ function clearTechnical() {
 function renderTechnicalFeed() {
   if (!technicalData) return;
   const d = technicalData, q = d.market_context;
-  const seconds = q.quote_time_utc ? Math.max(0, (Date.now() - Date.parse(q.quote_time_utc))/1000) : null;
+  const seconds = Number.isFinite(q.quote_age_seconds) ? q.quote_age_seconds + (performance.now()-technicalReceived)/1000 : null;
   const feed = d.live_feed_status === 'fresh' && seconds > d.config.quote_max_age_seconds ? 'stale' : d.live_feed_status;
-  $('technicalFeed').textContent = `Analysis: ${d.analysis_status} · Live feed: ${feed.toUpperCase()} · Quote: ${q.quote_time_utc || 'unavailable'}${seconds === null ? '' : ` (${Math.floor(seconds)}s old)`}`;
+  $('technicalFeed').textContent = `Analysis: ${d.analysis_status} · Live feed: ${feed.toUpperCase()} · Quote: ${q.quote_time_utc ? displayTime(q.quote_time_utc) : 'unavailable'}${seconds === null ? '' : ` (${Math.floor(seconds)}s old)`}`;
   $('technicalFeed').style.color = feed === 'fresh' ? '#a8ded0' : '#ffd28b';
 }
 function displayEvidence(data) {
@@ -141,7 +145,7 @@ async function loadTechnical(version, name, tf) {
   try {
     const data = await get(`/api/technical/${name}`);
     if (version !== chartVersion) return;
-    technicalData = data;
+    technicalData = data; technicalReceived = performance.now();
     const p = data.timeframes[data.primary_timeframe];
     const nearby = [p.location?.nearest_support,p.location?.nearest_resistance].filter(Boolean).sort((a,b)=>a.distance_price-b.distance_price)[0];
     const quotePrice = value => {
@@ -154,7 +158,7 @@ async function loadTechnical(version, name, tf) {
       `Volatility: ${p.volatility?.state || 'unavailable'} · Momentum: ${p.momentum?.state || 'unavailable'}\n` +
       `Location: ${p.location?.state || 'unavailable'} · M5 momentum: ${data.timing_momentum?.state || 'unavailable'}\n` +
       (nearby ? `Nearest ${nearby.zone.kind}: ${quotePrice(nearby.zone.lower)}–${quotePrice(nearby.zone.upper)} · distance ${nearby.distance_atr.toFixed(2)} ATR\n` : '') +
-      `Last M15 close: ${p.last_bar_close_utc || 'unavailable'}\n` +
+      `Last M15 close: ${p.last_bar_close_utc ? displayTime(p.last_bar_close_utc) : 'unavailable'}\n` +
       `Reasons: ${data.reasons.map(r => r.code).join(' · ')}`;
     $('technicalEvidence').textContent = displayEvidence(data);
     renderTechnicalFeed();
@@ -172,7 +176,7 @@ $('analyze').onclick = async () => {
   try {
     const data = await get('/api/analyze', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol,timeframe,question:$('question').value})});
     if (version !== contextVersion) return;
-    $('analysis').textContent = `${data.symbol} · ${data.timeframe || timeframe} · snapshot ${new Date(data.quote_time).toLocaleString()} (does not update live)\n\n${data.analysis}`;
+    $('analysis').textContent = `${data.symbol} · ${data.timeframe || timeframe} · snapshot ${displayTime(data.quote_time)} (does not update live)\n\n${data.analysis}`;
   } catch(error) {if (version === contextVersion) $('analysis').textContent = error.message;}
   finally {analysisBusy = false; updateStatus();}
 };

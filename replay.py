@@ -20,13 +20,17 @@ def load_snapshot(data):
                           tuple(SessionWindow(**s) for s in data.get('sessions', [])))
 
 
-def replay(snapshot, config=AnalysisConfig()):
+def replay(snapshot, config=AnalysisConfig(), start_utc=None, end_utc=None):
     primary = next(f for f in snapshot.timeframes if f.timeframe == config.primary)
     states, observations = [], []
     duration = PERIOD_SECONDS[config.primary]
     for bar in primary.candles[config.warmup_bars-1:]:
         as_of = bar.time + duration
         if as_of > snapshot.as_of_utc:
+            break
+        if start_utc is not None and as_of < start_utc:
+            continue
+        if end_utc is not None and as_of > end_utc:
             break
         # A lone current quote is not historical tick history. Omit it in both replay variants.
         replay_input = replace(snapshot, as_of_utc=as_of, quote=None, connected=None)

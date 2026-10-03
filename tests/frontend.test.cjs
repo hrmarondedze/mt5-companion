@@ -5,13 +5,13 @@ const fs = require('node:fs');
 function setup() {
   const elements = {}, pending = [];
   const element = id => elements[id] ||= {value:id === 'tf' ? 'M5' : '',textContent:'',innerHTML:'',style:{},disabled:false};
-  const context = vm.createContext({document:{getElementById:element,querySelector:()=>null,querySelectorAll:()=>[]},Date,AbortSignal,setInterval:()=>{},fetch:(url,options)=>new Promise(resolve=>pending.push({url,options,resolve}))});
+  const context = vm.createContext({document:{getElementById:element,querySelector:()=>null,querySelectorAll:()=>[]},Date,performance,AbortSignal,setInterval:()=>{},fetch:(url,options)=>new Promise(resolve=>pending.push({url,options,resolve}))});
   vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../static/app.js'),'utf8'),context);
   return {elements,pending,run:code=>vm.runInContext(code,context)};
 }
 const settle = () => new Promise(resolve=>setImmediate(resolve));
 const technicalData = symbol => ({symbol,primary_timeframe:'M15',primary_regime:'mixed',analysis_status:'valid',live_feed_status:'fresh',htf_bias:'up',htf_alignment:'aligned',config:{htf:'H1',quote_max_age_seconds:120},timeframes:{M15:{trend:{state:'up'},structure:{state:'mixed'},volatility:{state:'normal'},momentum:{state:'upward_weak'},location:{state:'no_zones'},last_bar_close_utc:new Date().toISOString()}},market_context:{quote_time_utc:new Date().toISOString()},reasons:[]});
-const data = symbol => ({symbol,timeframe:'M5',candles:[{time:Date.now()/1000,open:100,high:110,low:90,close:105}]});
+const data = symbol => ({symbol,timeframe:'M5',as_of_utc:Date.now()/1000,candles:[{time:Date.now()/1000,open:100,high:110,low:90,close:105}]});
 function respond(req,body,ok=true) {req.resolve({ok,json:async()=>body});}
 test('old chart response cannot overwrite a new selection', async()=>{
   const s=setup();
@@ -40,7 +40,7 @@ test('context changes clear old chart and analysis immediately',()=>{
 });
 test('stale quotes disable analysis and expose status',()=>{
   const s=setup();
-  s.run("marketOk=true; marketReceived=Date.now(); quotes={XAUUSD:{age_seconds:121}}; updateStatus()");
+  s.run("marketOk=true; marketReceived=performance.now(); quotes={XAUUSD:{age_seconds:121}}; updateStatus()");
   assert.equal(s.elements.analyze.disabled,true);
   assert.match(s.elements.status.textContent,/0\/4 quotes current/);
 });
@@ -71,4 +71,18 @@ test('technical errors clear the current result',async()=>{
   respond(s.pending.find(p=>p.url.includes('candles')),data('XAUUSD')); await settle();
   respond(s.pending.find(p=>p.url.includes('/technical/')),{detail:'Insufficient closed candles'},false); await settle();
   assert.match(s.elements.technical.textContent,/unavailable: Insufficient/);
+});
+
+test('freshness is independent of PC wall-clock changes',async()=>{
+  const s=setup();
+  respond(s.pending.find(p=>p.url.includes('candles')),data('XAUUSD')); await settle();
+  assert.equal(s.run('chartFresh()'),true);
+  s.run('Date = class extends Date { static now() { return 0; } }');
+  assert.equal(s.run('chartFresh()'),true);
+});
+
+test('timestamps display in Pretoria timezone',()=>{
+  const s=setup();
+  assert.match(s.run("displayTime('2026-10-03T22:00:00Z')"),/2026.*10.*04|04.*10.*2026/);
+  assert.match(s.run("displayTime('2026-10-03T22:00:00Z')"),/00:00/);
 });

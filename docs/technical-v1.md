@@ -105,7 +105,7 @@ The numbers above illustrate the file format; they are not measured prices.
 Use MT5 iMA(20/50, MODE_EMA, PRICE_CLOSE) and explicitly identified iATR(14)
 outputs on the same broker symbol/timeframe and bar close. Record terminal build,
 history start, and indicator settings in the indicator name or companion notes.
-Compare after sufficient warmup, with tolerance max(2 ticks, 1e-6 × absolute close).
+Compare after sufficient warmup, with tolerance max(2 ticks, 1e-6 Ã— absolute close).
 The comparison harness measures discrepancies; it does not presume iATR uses
 the engine's rolling smoothing. Any smoothing/seed difference must be documented
 before claiming parity or changing the versioned formula.
@@ -118,9 +118,19 @@ flat path, spikes, metadata/OHLC failures, missing optional M5, stale/future quo
 spread units, IANA DST, gaps, bounded merging, nearest edge and breakout precedence.
 Frontend checks cover obsolete responses and current-result errors.
 
-Live terminal verification was attempted during implementation, including outside
-the sandbox, but MT5 returned `(-10005, 'IPC timeout')`. **MT5 EMA/ATR parity and
-four-instrument, separate-period stability acceptance remain unverified.**
-After the terminal responds, export each target symbol and run separate earlier
-and later-period replays. Keep the later period held out when adjusting config.
-Do not interpret fixture success or a low flicker rate as positive expectancy.
+Native parity and separate-period replays are now complete. See
+[the measured validation report](validation-report.md) and
+`validation/reference-report.json` for counts, errors, period boundaries,
+regime durations, flicker rates, and limitations. No thresholds were tuned.
+
+## Runtime time integration
+
+`MT5_TIMESTAMP_TIMEZONE=Etc/GMT-3` is the explicit locally verified server-wall
+interpretation, based on the native export clock record. It is distinct from
+Pretoria display time (`Africa/Johannesburg`) and must be rechecked if the
+broker changes seasonal offsets. Never infer an offset from an old quote.
+
+The backend uses HTTPS UTC consensus with bounded monotonic caching. If no
+trusted sample is available for fifteen minutes, it reports
+`UTC_CLOCK_UNAVAILABLE`. The browser advances returned ages with
+`performance.now()` and never uses PC wall time to decide freshness.

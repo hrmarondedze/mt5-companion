@@ -1,0 +1,22 @@
+{
+  "XAUUSD_i": {
+    "point": 0.001,
+    "trade_tick_size": 0.001,
+    "digits": 3
+  },
+  "BTCUSD": {
+    "point": 0.01,
+    "trade_tick_size": 0.01,
+    "digits": 2
+  },
+  "GBPUSD_i": {
+    "point": 1e-05,
+    "trade_tick_size": 1e-05,
+    "digits": 5
+  },
+  "EURUSD_i": {
+    "point": 1e-05,
+    "trade_tick_size": 1e-05,
+    "digits": 5
+  }
+}
